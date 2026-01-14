@@ -11,12 +11,18 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from typing import cast
+import uuid
 
 import typer
 import yaml
 from datasets import load_dataset
 from jinja2 import StrictUndefined, Template
 from rich.live import Live
+
+from minisweagent.harness.constants import SWEbenchInstance
+from minisweagent.harness.grading import get_eval_report
+from minisweagent.harness.test_spec import make_test_spec
 
 from minisweagent import Environment
 from minisweagent.agents.default import DefaultAgent
@@ -128,6 +134,7 @@ def process_instance(
     output_dir: Path,
     config: dict,
     progress_manager: RunBatchProgressManager,
+    run_id: str,
 ) -> None:
     """Process a single SWEBench instance."""
     instance_id = instance["instance_id"]
@@ -162,7 +169,21 @@ def process_instance(
     finally:
         if env and hasattr(env, "stop"):
             env.stop()
-        save_traj(
+            
+            
+        logger.info(f"[EVAL]{instance_id} Running eval")
+
+        eval_report = run_eval(
+            instance=instance,
+            env=env,
+            model_patch=result,
+            instance_dir=instance_dir,
+            run_id=run_id
+        )
+        
+        logger.info(f"[EVAL]{instance_id} Eval completed")
+        
+        data = save_traj(
             agent,
             instance_dir / f"{instance_id}.traj.json",
             exit_status=exit_status,
@@ -173,6 +194,8 @@ def process_instance(
         )
         update_preds_file(output_dir / "preds.json", instance_id, model.config.model_name, result)
         progress_manager.on_instance_end(instance_id, exit_status)
+        
+        return data, eval_report
 
 
 def filter_instances(
@@ -195,6 +218,66 @@ def filter_instances(
     return instances
 
 
+# Custom Functions
+def run_eval(
+    instance: SWEbenchInstance,
+    env: Environment,
+    model_patch: str,
+    instance_dir: str,
+    run_id: str,
+    is_golden: bool = False,
+):
+    instances = [cast(SWEbenchInstance, instance)]
+    test_spec = list(map(make_test_spec, instances))[0]
+
+    pred = {"instance_id": test_spec.instance_id, "model_patch": model_patch}
+
+    instance_id = test_spec.instance_id
+
+    log_dir = instance_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    report_path = log_dir / f"report_{run_id}.json"
+    patch_file = log_dir / f"patch_{run_id}.diff"
+    with open(patch_file, "w") as f:
+        f.write(model_patch)
+
+    logger.info(f"DEBUG test_spec {test_spec}")
+    logger.info(f"DEBUG eval_script {test_spec.eval_script}")
+
+    if is_golden:
+        res = env.execute(command=f"cat > patch.diff <<'EOF'\n{model_patch}\n\nEOF")
+        res = env.execute(command="git status --porcelain")
+        res = env.execute(command="git apply --check patch.diff")
+        res = env.execute(command="git apply patch.diff")
+
+    eval_script = test_spec.eval_script.replace("#!/bin/bash", "")
+    res = env.execute(command=eval_script)
+
+    test_output, returncode = res["output"], res["returncode"]
+    logger.info(f"[EVAL]{instance_id} returncode: {returncode}")
+
+    test_output_path = log_dir / f"test_output_{run_id}.txt"
+    with open(test_output_path, "w") as f:
+        f.write(test_output)
+        logger.info(f"[EVAL]{instance_id} Test output written to {test_output_path}")
+
+    report = get_eval_report(
+        test_spec=test_spec,
+        prediction=pred,
+        log_path=test_output_path,
+        include_tests_status=True,
+    )
+    logger.info(f"[EVAL]{instance_id} Result: resolved: {report[instance_id]['resolved']}")
+
+    with open(report_path, "w") as f:
+        f.write(json.dumps(report, indent=4))
+
+    return {
+        "instance_id": instance_id,
+        "model_patch": model_patch,
+        "eval_report": report,
+    }
+
 # fmt: off
 @app.command(help=_HELP_TEXT)
 def main(
@@ -203,7 +286,7 @@ def main(
     slice_spec: str = typer.Option("", "--slice", help="Slice specification (e.g., '0:5' for first 5 instances)", rich_help_panel="Data selection"),
     filter_spec: str = typer.Option("", "--filter", help="Filter instance IDs by regex", rich_help_panel="Data selection"),
     shuffle: bool = typer.Option(False, "--shuffle", help="Shuffle instances", rich_help_panel="Data selection"),
-    output: str = typer.Option("", "-o", "--output", help="Output directory", rich_help_panel="Basic"),
+    output: str = typer.Option("testfolder", "-o", "--output", help="Output directory", rich_help_panel="Basic"),
     workers: int = typer.Option(1, "-w", "--workers", help="Number of worker threads for parallel processing", rich_help_panel="Basic"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use", rich_help_panel="Basic"),
     model_class: str | None = typer.Option(None, "-c", "--model-class", help="Model class to use (e.g., 'anthropic' or 'minisweagent.models.anthropic.AnthropicModel')", rich_help_panel="Advanced"),
@@ -237,13 +320,26 @@ def main(
         config.setdefault("model", {})["model_name"] = model
     if model_class is not None:
         config.setdefault("model", {})["model_class"] = model_class
+        
+    run_id = f"{int(time.time())}_{str(uuid.uuid4())}"
 
-    progress_manager = RunBatchProgressManager(len(instances), output_path / f"exit_statuses_{time.time()}.yaml")
+    progress_manager = RunBatchProgressManager(len(instances), output_path / f"exit_statuses_{time.time()}_{run_id}.yaml")
+    results = {}
 
     def process_futures(futures: dict[concurrent.futures.Future, str]):
+        completed = 0
+        total = len(futures)
         for future in concurrent.futures.as_completed(futures):
             try:
-                future.result()
+                data, eval_report = future.result()
+                completed += 1
+                logger.info(f"Progress: {completed}/{total} instances completed")
+                
+                if data is None:
+                    continue
+                
+                results[data["instance_id"]] = data
+                results[data["instance_id"]]["eval_report"] = eval_report
             except concurrent.futures.CancelledError:
                 pass
             except Exception as e:
@@ -251,14 +347,34 @@ def main(
                 logger.error(f"Error in future for instance {instance_id}: {e}", exc_info=True)
                 progress_manager.on_uncaught_exception(instance_id, e)
 
-    with Live(progress_manager.render_group, refresh_per_second=4):
+    # Run the following code if the script is called directly
+    if __name__ == "__main__":
+        with Live(progress_manager.render_group, refresh_per_second=4):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(process_instance, instance, output_path, config, progress_manager, run_id): instance[
+                        "instance_id"
+                    ]
+                    for instance in instances
+                }
+                
+                try:
+                    process_futures(futures)
+                except KeyboardInterrupt:
+                    logger.info("Cancelling all pending jobs. Press ^C again to exit immediately.")
+                    for future in futures:
+                        if not future.running() and not future.done():
+                            future.cancel()
+                    process_futures(futures)
+    else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(process_instance, instance, output_path, config, progress_manager): instance[
+                executor.submit(process_instance, instance, output_path, config, progress_manager, run_id): instance[
                     "instance_id"
                 ]
                 for instance in instances
             }
+            
             try:
                 process_futures(futures)
             except KeyboardInterrupt:
@@ -267,6 +383,8 @@ def main(
                     if not future.running() and not future.done():
                         future.cancel()
                 process_futures(futures)
+                
+    return results
 
 
 if __name__ == "__main__":

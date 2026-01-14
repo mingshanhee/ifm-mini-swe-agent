@@ -68,3 +68,5 @@ def save_traj(
     path.write_text(json.dumps(data, indent=2))
     if print_path:
         print_fct(f"Saved trajectory to '{path}'")
+
+    return data
