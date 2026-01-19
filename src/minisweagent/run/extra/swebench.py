@@ -43,6 +43,7 @@ More information about the usage: [bold green]https://mini-swe-agent.com/latest/
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 
 DATASET_MAPPING = {
+    "gym": "SWE-Gym/SWE-Gym",
     "full": "princeton-nlp/SWE-Bench",
     "verified": "princeton-nlp/SWE-Bench_Verified",
     "lite": "princeton-nlp/SWE-Bench_Lite",
@@ -78,8 +79,14 @@ def get_swebench_docker_image_name(instance: dict) -> str:
     if image_name is None:
         # Docker doesn't allow double underscore, so we replace them with a magic token
         iid = instance["instance_id"]
-        id_docker_compatible = iid.replace("__", "_1776_")
-        image_name = f"docker.io/swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+
+        if instance.get("subset", "swebench") == "gym":
+            id_docker_compatible = iid.replace("__", "_s_")
+            image_name = f"xingyaoww/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+        else:
+            id_docker_compatible = iid.replace("__", "_1776_")
+            image_name = f"swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+            
     return image_name
 
 
