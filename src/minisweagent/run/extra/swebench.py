@@ -8,6 +8,7 @@ import json
 import random
 import re
 import threading
+import subprocess
 import time
 import traceback
 from pathlib import Path
@@ -71,6 +72,20 @@ class ProgressTrackingAgent(DefaultAgent):
             self.instance_id, f"Step {self.model.n_calls + 1:3d} (${self.model.cost:.2f})"
         )
         return super().step()
+
+
+def check_docker_image_exists(image_name: str) -> bool:
+    """Check if a docker image exists locally or on remote."""
+    try:
+        # Check locally first
+        res = subprocess.run(["docker", "image", "inspect", image_name], capture_output=True, text=True)
+        if res.returncode == 0:
+            return True
+        # Check remote (only manifest, won't pull)
+        res = subprocess.run(["docker", "manifest", "inspect", image_name], capture_output=True, text=True)
+        return res.returncode == 0
+    except Exception:
+        return False
 
 
 def get_swebench_docker_image_name(instance: dict) -> str:
@@ -174,10 +189,6 @@ def process_instance(
         exit_status, result = type(e).__name__, str(e)
         extra_info = {"traceback": traceback.format_exc()}
     finally:
-        if env and hasattr(env, "stop"):
-            env.stop()
-            
-            
         logger.info(f"[EVAL]{instance_id} Running eval")
 
         eval_report = run_eval(
@@ -188,6 +199,9 @@ def process_instance(
             run_id=run_id
         )
         
+        if env and hasattr(env, "stop"):
+            env.stop()
+            
         logger.info(f"[EVAL]{instance_id} Eval completed")
         
         data = save_traj(
@@ -197,6 +211,7 @@ def process_instance(
             result=result,
             extra_info=extra_info,
             instance_id=instance_id,
+            eval_report=eval_report.get("eval_report", {}).get(instance_id, {}),
             print_fct=logger.info,
         )
         update_preds_file(output_dir / "preds.json", instance_id, model.config.model_name, result)
@@ -297,12 +312,13 @@ def main(
     workers: int = typer.Option(1, "-w", "--workers", help="Number of worker threads for parallel processing", rich_help_panel="Basic"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use", rich_help_panel="Basic"),
     model_class: str | None = typer.Option(None, "-c", "--model-class", help="Model class to use (e.g., 'anthropic' or 'minisweagent.models.anthropic.AnthropicModel')", rich_help_panel="Advanced"),
+    run_id: str | None = typer.Option(None, "-r", "--run-id", help="Run ID", rich_help_panel="Advanced"),
     redo_existing: bool = typer.Option(False, "--redo-existing", help="Redo existing instances", rich_help_panel="Data selection"),
     config_spec: Path = typer.Option( builtin_config_dir / "extra" / "swebench.yaml", "-c", "--config", help="Path to a config file", rich_help_panel="Basic"),
     environment_class: str | None = typer.Option( None, "--environment-class", help="Environment type to use. Recommended are docker or singularity", rich_help_panel="Advanced"),
 ) -> None:
     # fmt: on
-    output_path = Path(output)
+    output_path = Path(output) / run_id / model
     output_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Results will be saved to {output_path}")
     add_file_handler(output_path / "minisweagent.log")
@@ -310,6 +326,23 @@ def main(
     dataset_path = DATASET_MAPPING.get(subset, subset)
     logger.info(f"Loading dataset {dataset_path}, split {split}...")
     instances = list(load_dataset(dataset_path, split=split))
+
+    if subset == "gym":
+        logger.info("Filtering gym instances by docker image availability...")
+        available_instances = []
+        for instance in instances:
+            instance["subset"] = "gym"
+            image_name = get_swebench_docker_image_name(instance)
+            if check_docker_image_exists(image_name):
+                available_instances.append(instance)
+        
+        logger.info(f"Found {len(available_instances)} available instances out of {len(instances)}")
+        if len(available_instances) > 50:
+            random.seed(42)
+            instances = random.sample(available_instances, 50)
+            logger.info("Sampled 50 random instances.")
+        else:
+            instances = available_instances
 
     instances = filter_instances(instances, filter_spec=filter_spec, slice_spec=slice_spec, shuffle=shuffle)
     if not redo_existing and (output_path / "preds.json").exists():
