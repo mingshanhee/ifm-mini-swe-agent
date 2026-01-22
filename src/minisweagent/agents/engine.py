@@ -9,6 +9,7 @@ from minisweagent.agents.default import (
     LimitsExceeded, 
 )
 from minisweagent import Environment, Model
+from pydantic import BaseModel
 
 class AgentFlyConfig(BaseModel):
     # Check the config files in minisweagent/config for example settings
