@@ -116,6 +116,9 @@ def get_sb_environment(config: dict, instance: dict) -> Environment:
         env_config["image"] = "docker://" + image_name
     elif env_config["environment_class"] == "enroot":
         env_config["image"] = "docker://" + image_name.replace("docker.io/", "")
+    elif env_config["environment_class"] == "remote":
+        env_config["container_type"] = "docker"
+        env_config["image"] = image_name
         
     env = get_environment(env_config)
     if startup_command := config.get("run", {}).get("env_startup_command"):
@@ -316,6 +319,7 @@ def main(
     redo_existing: bool = typer.Option(False, "--redo-existing", help="Redo existing instances", rich_help_panel="Data selection"),
     config_spec: Path = typer.Option( builtin_config_dir / "extra" / "swebench.yaml", "-c", "--config", help="Path to a config file", rich_help_panel="Basic"),
     environment_class: str | None = typer.Option( None, "--environment-class", help="Environment type to use. Recommended are docker or singularity", rich_help_panel="Advanced"),
+    remote_url: str = typer.Option("http://localhost:8008", "--remote-url", help="URL for RemoteEnvironment", rich_help_panel="Advanced"),
 ) -> None:
     # fmt: on
     output_path = Path(output) / run_id / model
@@ -356,6 +360,8 @@ def main(
     config = yaml.safe_load(config_path.read_text())
     if environment_class is not None:
         config.setdefault("environment", {})["environment_class"] = environment_class
+        if environment_class == "remote":
+            config["environment"]["url"] = remote_url
     if model is not None:
         config.setdefault("model", {})["model_name"] = model
     if model_class is not None:

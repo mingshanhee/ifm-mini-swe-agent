@@ -13,6 +13,7 @@ _ENVIRONMENT_MAPPING = {
     "swerex_docker": "minisweagent.environments.extra.swerex_docker.SwerexDockerEnvironment",
     "swerex_modal": "minisweagent.environments.extra.swerex_modal.SwerexModalEnvironment",
     "bubblewrap": "minisweagent.environments.extra.bubblewrap.BubblewrapEnvironment",
+    "remote": "minisweagent.environments.remote.RemoteEnvironment",
 }
 
 
