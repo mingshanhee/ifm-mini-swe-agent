@@ -36,36 +36,40 @@ def save_traj(
     """
     if path is None:
         return
-    data = {
-        "info": {
-            "exit_status": exit_status,
-            "submission": result,
-            "model_stats": {
-                "instance_cost": 0.0,
-                "api_calls": 0,
-            },
-            "mini_version": __version__,
-        },
-        "messages": [],
-        "trajectory_format": "mini-swe-agent-1",
-    } | kwargs
-    if agent is not None:
-        data["info"]["model_stats"]["instance_cost"] = agent.model.cost
-        data["info"]["model_stats"]["api_calls"] = agent.model.n_calls
-        data["messages"] = agent.messages
-        data["info"]["config"] = {
-            "agent": agent.config.model_dump(),
-            "model": agent.model.config.model_dump(),
-            "environment": agent.env.config.model_dump(),
-            "agent_type": _get_class_name_with_module(agent),
-            "model_type": _get_class_name_with_module(agent.model),
-            "environment_type": _get_class_name_with_module(agent.env),
-        }
-    if extra_info:
-        data["info"].update(extra_info)
+        
+    if extra_info is None:
+        extra_info = {}
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
+    if agent is not None:
+        data = agent.save(
+            path,
+            {
+                "info": {
+                    "exit_status": exit_status,
+                    "submission": result,
+                    **extra_info,
+                },
+                **kwargs,
+            },
+        )
+    else:
+        data = {
+            "info": {
+                "exit_status": exit_status,
+                "submission": result,
+                "model_stats": {
+                    "instance_cost": 0.0,
+                    "api_calls": 0,
+                },
+                "mini_version": __version__,
+                **extra_info,
+            },
+            "messages": [],
+            "trajectory_format": "mini-swe-agent-1",
+        } | kwargs
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
     if print_path:
         print_fct(f"Saved trajectory to '{path}'")
 

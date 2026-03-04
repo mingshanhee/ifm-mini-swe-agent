@@ -1,3 +1,5 @@
+.cursor/rules/_*
+uv.lock
 patch.txt
 exit_statuses*.yaml
 preds.json
@@ -5,6 +7,7 @@ preds.json
 .env
 traj.json
 .claude/**
+.vscode/**
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python

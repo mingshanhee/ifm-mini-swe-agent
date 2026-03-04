@@ -128,6 +128,11 @@ The model registry JSON file should follow LiteLLM's format:
 
     Model names are case sensitive. Please make sure you have an exact match.
 
+!!! warning "Model provider"
+
+    If you use the `custom_llm_provider` or have a provider prefixed to the model name (e.g., `openai/...`),
+    then this must also match `litellm_provider` in the config!
+
 There are two ways of setting the path to the model registry:
 
 1. Set `LITELLM_MODEL_REGISTRY_PATH` (e.g., `mini-extra config set LITELLM_MODEL_REGISTRY_PATH /path/to/model_registry.json`)
@@ -154,7 +159,7 @@ vllm serve ricdomolm/mini-coder-1.7b &
 
 By default, the server will be available at `http://localhost:8000`.
 
-Second, edit the mini-swe-agent SWE-bench config file located in `src/minisweagent/config/extra/swebench.yaml` to include your local vLLM model:
+Second, edit the mini-swe-agent SWE-bench config file located in `src/minisweagent/config/benchmarks/swebench.yaml` to include your local vLLM model:
 
 ```yaml
 model:

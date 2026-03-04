@@ -14,6 +14,7 @@ _ENVIRONMENT_MAPPING = {
     "swerex_modal": "minisweagent.environments.extra.swerex_modal.SwerexModalEnvironment",
     "bubblewrap": "minisweagent.environments.extra.bubblewrap.BubblewrapEnvironment",
     "remote": "minisweagent.environments.remote.RemoteEnvironment",
+    "contree": "minisweagent.environments.extra.contree.ContreeEnvironment",
 }
 
 
