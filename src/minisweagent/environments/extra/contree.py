@@ -1,16 +1,15 @@
 import logging
+import os
 import platform
 import shlex
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, is_dataclass
 from numbers import Number
-from typing import Any, TypedDict
-from urllib.parse import urlparse
+from typing import Any, NotRequired, TypedDict
 
 from contree_sdk import ContreeSync
 from contree_sdk.config import ContreeConfig
-from contree_sdk.sdk.exceptions import NotFoundError
 from contree_sdk.sdk.objects.image import ContreeImageSync
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from minisweagent import Environment
 from minisweagent.exceptions import Submitted
@@ -29,22 +28,28 @@ class ContreeEnvironmentConfig(BaseModel):
     """Working directory in which to execute commands."""
     cwd_auto_create: bool = True
     """Create cwd before running any commands."""
-    env: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, str] = {}
     """Environment variables to set in the container."""
-    forward_env: list[str] = Field(default_factory=list)
+    forward_env: list[str] = []
     """Environment variables to forward to the container.
     Variables are only forwarded if they are set in the host environment.
     In case of conflict with `env`, the `env` variables take precedence.
     """
-    interpreter: list[str] = Field(default_factory=lambda: ["bash", "-c"])
+    interpreter: list[str] = ["bash", "-c"]
     """Interpreter to execute commands"""
-    timeout: int = 30
+    timeout: int = 100
     """Timeout for executing commands in the container."""
+    import_username: str | None = None
+    """Username that will be used if image needs to be imported."""
+    import_password: str | None = None
+    """Password that will be used if image needs to be imported."""
 
 
 class ExecutionResult(TypedDict):
     output: str
     returncode: int
+    exception_info: str
+    extra: NotRequired[dict[str, Any]]
 
 
 class ContreeEnvironment(Environment):
@@ -56,7 +61,7 @@ class ContreeEnvironment(Environment):
         self.logger = logging.getLogger("minisweagent.environment")
 
         if isinstance(self.config.contree_config, dict):
-            self.config = replace(self.config, contree_config=ContreeConfig(**self.config.contree_config))
+            self.config = self.config.model_copy(update={"contree_config": ContreeConfig(**self.config.contree_config)})
 
         self.client = ContreeSync(config=self.config.contree_config)
         self.session = self._pull_image().session()
@@ -67,42 +72,31 @@ class ContreeEnvironment(Environment):
             )
 
     def _pull_image(self) -> ContreeImageSync:
-        image_tag = self.config.image_tag or ContreeEnvironment.get_tag_by_image_url(self.config.image)
-        if image_tag:
-            try:
-                self.logger.info(f"Pulling image by tag: {image_tag}")
-                image = self.client.images.pull(image_tag)
-                self.logger.info(f"Pulled image by tag: {image_tag}")
-                return image
-            except NotFoundError:
-                self.logger.warning(
-                    f"Failed to pull image by tag: {image_tag}, starting to import from: {self.config.image}"
-                )
-
-        self.logger.info(f"Pulling image: {self.config.image}")
-        return self.client.images.pull(self.config.image, new_tag=image_tag)
+        return self.client.images.oci(
+            self.config.image,
+            tag=self.config.image_tag,
+            username=self.config.import_username,
+            password=self.config.import_password,
+        )
 
     def _shell_command(self, command: str) -> str:
         shell_cmd = " ".join(self.config.interpreter)
         return f"{shell_cmd} {shlex.quote(command)}"
 
-    def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
+    def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> ExecutionResult:
         """Execute a command in the environment and return the raw output."""
         command = action.get("command")
-        self.session.run(
-            shell=self._shell_command(command),
-            cwd=cwd or self.config.cwd,
-            timeout=timeout or self.config.timeout,
-            disposable=False,
-        ).wait()
 
-        cwd = cwd or self.config.cwd
+        env = {k: v for k in self.config.forward_env if (v := os.getenv(k)) is not None}
+        env.update(self.config.env)
+
         try:
             self.session.run(
                 shell=self._shell_command(command),
                 cwd=cwd or self.config.cwd,
                 timeout=timeout or self.config.timeout,
                 disposable=False,
+                env=env or None,
             ).wait()
             output = {
                 "output": self.session.stdout + self.session.stderr,
@@ -152,21 +146,3 @@ class ContreeEnvironment(Environment):
                 }
             }
         }
-
-    @staticmethod
-    def get_tag_by_image_url(url: str) -> str:
-        url_parsed = urlparse(url)
-        if url_parsed.netloc:
-            url = url_parsed.path
-
-        if ":" not in url:
-            url += ":latest"
-        parts = url.split("/", 1)
-        if len(parts) == 1:
-            return parts[0]
-        domain, url_path = parts
-        if "." in domain and ("docker" in domain or "io" in domain):
-            return url_path or domain
-        if domain:
-            return f"{domain}/{url_path}"
-        return url_path

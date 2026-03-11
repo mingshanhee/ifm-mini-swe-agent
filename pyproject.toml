@@ -54,7 +54,6 @@ full = [
     "swe-rex>=1.4.0",
     "mini-swe-agent[modal]",
     "mini-swe-agent[contree]",
-
 ]
 
 modal = [
@@ -80,13 +79,13 @@ dev = [
 ]
 
 contree = [
-    "contree-sdk>=0.1.0",
+    "contree-sdk>=0.2.0",
 ]
 
 [project.urls]
 Documentation = "https://mini-swe-agent.com/latest/"
-Repository = "https://github.com/SWE-agent/mini-SWE-agent"
-"Bug Tracker" = "https://github.com/SWE-agent/mini-SWE-agent/issues"
+Repository = "https://github.com/SWE-agent/mini-swe-agent"
+"Bug Tracker" = "https://github.com/SWE-agent/mini-swe-agent/issues"
 
 [project.scripts]
 mini = "minisweagent.run.mini:app"
